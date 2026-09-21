@@ -19,6 +19,7 @@
 - Stack: chi, goose (embedded SQL in `migrations/`), hand-written store SQL (sqlc deferred), Vite/React/TanStack Query.
 - **UI:** flat minimal ops-console shell (no glow backgrounds / heavy card shadows); IBM Plex; themes system / light / dark / gruvbox via `data-theme` tokens in `web/src/styles/app.css`. Light/dark palettes match Gitea built-ins (`gitea-light` / `gitea-dark` primary `#4183c4`); gruvbox is Lens-only. OAuth users: `/api/v1/auth/me` may include mapped `theme` from Gitea `GET /user/settings` (only `gitea-light`→light, `gitea-dark`→dark, `gitea-auto`→system); custom/unknown Gitea themes fail closed (no sync). Manual ThemePicker sets `lens-theme-manual` and stops syncing. Requires stored OAuth token (`LENS_ENCRYPTION_KEY`). List pages share a table/card view toggle (`lens-view-mode` in localStorage). **Forms:** text/password/url/number input names use `placeholder` + `aria-label` (no external `<label>`), except when placeholder is not feasible (e.g. retention day grid with always-filled side-by-side numbers; checkbox text; non-input captions like Redirect URI). **Dashboard** (`/`) is the home route; summary metrics are time-scoped via `GET /api/v1/summary?days=` (allowlist 1/7/30/90, default **7**); range control persists in `lens-dashboard-range-days`. Repositories count is inventory (not ranged); open PRs / attention / failed / running respect the window. **Dashboard trends/breakdowns** use `GET /api/v1/stats?days=` (same 1/7/30/90 allowlist as summary), ACL-scoped; charts are lightweight SVG/CSS (`StackedAreaChart`, `BarList`, `StatCallout`) — no chart library. Day-series JSON field is `day` (not `date`).
 - **PR CI state:** populated from Gitea combined commit status (`/commits/{sha}/status`) on sync, with fallback from indexed workflow runs; live updates on `workflow_run` webhooks; shown as pass/fail/pending badges on the Pull Requests tab.
+- **Pipelines UI:** `/pipelines` groups runs by action (`repo_full` + `workflow_path`, fallback name); expand a group to list individual runs, then open `/pipelines/:id` for run detail.
 - No Redis; SSE not WebSockets; Gitea-only forge; compose filename `compose.yaml`.
 - Logs fetched on demand; Prometheus `/metrics` requires auth (same session cookie as API) and exposes the 11 PRD §41 series (labels: status/event only — never repo names).
 - **Webhook HMAC:** Fail closed when `gitea.url` is set and secret empty unless `gitea.allow_unsigned_webhooks` / `LENS_WEBHOOK_ALLOW_UNSIGNED=true`. Secrets via `LENS_WEBHOOK_SECRET` / `LENS_WEBHOOK_SECRET_FILE` (and longer aliases). Unreadable `*_FILE` paths fail config load (no silent clear).
@@ -30,12 +31,14 @@
 - **Encryption:** optional `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) persists OAuth tokens at rest.
 - **Installer:** `scripts/install.sh` (interactive or `--config` + `--non-interactive`); writes gitignored `.env` + `config.yaml`; Compose default, `--method binary` optional.
 - **k3s-home deploy:** namespace `gitea-lens`, Helm chart `deploy/helm/gitea-lens`, values `values-k3s-home.yaml`.
-- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.9` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
+- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.10` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
 - **URL:** `https://lens.ncdlabs.com` (Traefik + cert-manager `letsencrypt-cloudflare-production`; Tailscale private-ingress VIP `100.125.125.244`).
 - **Gitea:** `https://git.ncdlabs.com` (1.25.5, hostNetwork on k3s3). System webhook id `1` → `https://lens.ncdlabs.com/api/webhooks/gitea`. OAuth app name `Gitea Lens` (user apps id `4`), redirect `https://lens.ncdlabs.com/api/v1/auth/callback`.
 
 ## References
 
+- Docs index: `docs/README.md` (architecture, features, API, auth, deploy, ops)
+- Wiki clone (sibling): `/Users/lou/git/gitea-lens.wiki` — push after first GitHub wiki page exists
 - Spec: `docs/prd-spec.md`
 - Plan: `docs/implementation-plan.md`
 - Config example: `config.example.yaml`
