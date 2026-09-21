@@ -1,53 +1,87 @@
 # PROJECT_SHARED_STATE
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 ## Architecture
 
-- **Product:** Gitea Lens — self-hosted CI/CD and PR operations console for Gitea (“Native experience. External architecture.”).
-- **Shape:** Go single-binary backend + embedded React/TypeScript SPA; SQLite default, PostgreSQL optional; Gitea via API + webhooks only (no fork).
-- **Boundaries:** `internal/forge` (Gitea-only impl in V1) · `internal/store` (SQL) · `internal/api` (REST `/api/v1`) · `internal/sync` + `internal/webhooks` · `internal/auth` / `internal/authz` · `internal/attention` · `internal/workflows` · SSE in `internal/realtime`.
-- **Authz:** Sync service credential ≠ user session; all user-visible queries scoped by `user_repository_access` server-side (no client-side filtering as security).
+- **Product:** Gitea Lens — self-hosted CI/CD and PR operations console for Gitea.
+- **Shape:** Go single-binary (`cmd/lens`) + embedded React/Vite SPA (`internal/server/ui/dist`); SQLite default; Gitea via API + webhooks.
+- **Boundaries:** `internal/forge` (+ `gitea`) · `internal/store` · `internal/api` · `internal/sync` · `internal/webhooks` · `internal/auth` / `internal/authz` · `internal/attention` · `internal/workflows` · `internal/realtime` (SSE) · `internal/metrics` · `internal/ratelimit` · `internal/settings` · `internal/uiinstall`.
+- **Auth:** Gitea OAuth Authorization Code + PKCE (`/api/v1/auth/login` → `/api/v1/auth/callback`) plus optional bootstrap password. ACL table `user_repository_access` enforced for non-bootstrap users; periodic ACL refresh (`auth.acl_refresh_interval`, default 6h) for users with decryptable OAuth tokens. Sync does not auto-grant ACL.
+- **CSRF:** Double-submit cookie `lens_csrf` (non-HttpOnly) + header `X-CSRF-Token` on state-changing `/api/v1` writes (bootstrap login, logout, sync-repos, settings PUT). Issued via `/api/v1/ui-config` and rotated on session create / `/auth/me`. Exempt: OAuth GET callback, webhooks, health, metrics, GETs.
+- **Attention:** Discrete PRD §10 rules with severities `critical` / `warning` / `waiting` only; legacy `open_pull_request` fingerprints resolved on evaluate. Periodic sweep (~10m). `attention.long_running_after` (default 2h). Runner-unavailable rule is a no-op until forge exposes signals.
+- **Settings:** `GET/PUT /api/v1/settings` — editable runtime overrides (instance name, sync history days, long-running threshold, retention windows, **`server_external_url`**) plus **DB-backed Gitea integration** (URL, service token, webhook HMAC, private-network/unsigned flags, OAuth client id/secret) and `setup_completed`, all in `app_settings` (single row). File/env remain defaults until UI/DB wins on save; cluster Secret/env still optional default for k3s. Secrets are write-only (`*_configured` booleans on GET; empty secret on PUT = leave unchanged; `clear_*` flags clear). PUT is bootstrap-admin + CSRF only; applies live to sync/auth/webhooks/attention/retention (external URL live-applies to OAuth redirect + webhook delivery). **Setup wizard** at `/setup` for bootstrap admins when `setup_completed` is false (gated in `App.tsx`); Connect step collects Gitea URL/token + Lens public URL; `POST /api/v1/setup/check-gitea-url` normalizes/probes URL on blur; `POST /api/v1/setup/test-connection` runs permission probes (connectivity: reachability, auth, Lens public URL; permissions: admin, repos/orgs, PRs, Actions, commit status, system hooks) and returns check rows + webhook preview; `POST /api/v1/setup/create-webhook` generates HMAC secret and optionally `POST/PATCH /admin/hooks` system webhook; `POST /api/v1/setup/complete`. Connect → Test Connection modal → webhook confirm (I'll add it in Gitea / Cancel / Create webhook). First full integration persist is via create-webhook or Webhooks step. UI: preference + Integration forms on `/settings` with dirty Cancel/Save.
 
 ## Decisions
 
-- Follow [`docs/prd-spec.md`](docs/prd-spec.md) as product/tech source of truth; build from [`docs/implementation-plan.md`](docs/implementation-plan.md).
-- Adopt PRD ADR-001…015; plan adds ADR-016…028 (chi, goose, sqlc, Vite/TanStack/React Flow, DB sessions, AES-GCM secrets, ACL table, in-process webhook workers, SSE-first, module path `github.com/ncdlabs/gitea-lens`).
-- **Sequencing refinement:** Authentication/authorization (M4) before core UI (M5), even though PRD §59 lists OAuth later — so UI never ships without server-side repo filtering.
-- No Redis, no WebSockets for V1 unless SSE proven insufficient; no Forgejo/GitHub/GitLab impl yet; no per-repo Lens config; telemetry off.
-- Logs fetched on demand; not persisted by default.
-- Compose/Helm use `.yaml` preference (`compose.yaml`).
+- Follow `docs/prd-spec.md` + `docs/implementation-plan.md`.
+- Module path: `github.com/ncdlabs/gitea-lens`.
+- Stack: chi, goose (embedded SQL in `migrations/`), hand-written store SQL (sqlc deferred), Vite/React/TanStack Query.
+- **UI:** flat minimal ops-console shell (no glow backgrounds / heavy card shadows); IBM Plex; themes system / light / dark / gruvbox via `data-theme` tokens in `web/src/styles/app.css`. Light/dark palettes match Gitea built-ins (`gitea-light` / `gitea-dark` primary `#4183c4`); gruvbox is Lens-only. OAuth users: `/api/v1/auth/me` may include mapped `theme` from Gitea `GET /user/settings` (only `gitea-light`→light, `gitea-dark`→dark, `gitea-auto`→system); custom/unknown Gitea themes fail closed (no sync). Manual ThemePicker sets `lens-theme-manual` and stops syncing. Requires stored OAuth token (`LENS_ENCRYPTION_KEY`). List pages share a table/card view toggle (`lens-view-mode` in localStorage). **Forms:** text/password/url/number input names use `placeholder` + `aria-label` (no external `<label>`), except when placeholder is not feasible (e.g. retention day grid with always-filled side-by-side numbers; checkbox text; non-input captions like Redirect URI). **Dashboard** (`/`) is the home route; summary metrics are time-scoped via `GET /api/v1/summary?days=` (allowlist 1/7/30/90, default **7**); range control persists in `lens-dashboard-range-days`. Repositories count is inventory (not ranged); open PRs / attention / failed / running respect the window. **Dashboard trends/breakdowns** use `GET /api/v1/stats?days=` (same 1/7/30/90 allowlist as summary), ACL-scoped; charts are lightweight SVG/CSS (`StackedAreaChart`, `BarList`, `StatCallout`) — no chart library. Day-series JSON field is `day` (not `date`).
+- **PR CI state:** populated from Gitea combined commit status (`/commits/{sha}/status`) on sync, with fallback from indexed workflow runs; live updates on `workflow_run` webhooks; shown as pass/fail/pending badges on the Pull Requests tab.
+- No Redis; SSE not WebSockets; Gitea-only forge; compose filename `compose.yaml`.
+- Logs fetched on demand; Prometheus `/metrics` requires auth (same session cookie as API) and exposes the 11 PRD §41 series (labels: status/event only — never repo names).
+- **Webhook HMAC:** Fail closed when `gitea.url` is set and secret empty unless `gitea.allow_unsigned_webhooks` / `LENS_WEBHOOK_ALLOW_UNSIGNED=true`. Secrets via `LENS_WEBHOOK_SECRET` / `LENS_WEBHOOK_SECRET_FILE` (and longer aliases). Unreadable `*_FILE` paths fail config load (no silent clear).
+- **Integrity:** Upserts COALESCE nil timestamps; PR rejects older `updated_at`; runs accept greater `run_attempt` or same attempt with non-regressing status; open-PR sync closes numbers absent from open list; soft-delete only rows with `last_synced_at < syncStart`; webhook `processing` reaper (~5m).
+- **Proxy prefix:** Strip only `PathPrefix()` from `external_url`; do not trust client `X-Forwarded-Prefix`.
+- **Rate limits:** In-process per-IP limits on bootstrap login, OAuth login start, and webhook POST (no Redis).
+- **OAuth redirect:** only same-app relative paths (`auth.SafeRedirectPath`); absolute/`//` URLs dropped.
+- **SSE:** `/api/v1/events` filters by `authz.CanAccessRepo` (bootstrap admins see all).
+- **Encryption:** optional `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) persists OAuth tokens at rest.
+- **Installer:** `scripts/install.sh` (interactive or `--config` + `--non-interactive`); writes gitignored `.env` + `config.yaml`; Compose default, `--method binary` optional.
+- **k3s-home deploy:** namespace `gitea-lens`, Helm chart `deploy/helm/gitea-lens`, values `values-k3s-home.yaml`.
+- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.9` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
+- **URL:** `https://lens.ncdlabs.com` (Traefik + cert-manager `letsencrypt-cloudflare-production`; Tailscale private-ingress VIP `100.125.125.244`).
+- **Gitea:** `https://git.ncdlabs.com` (1.25.5, hostNetwork on k3s3). System webhook id `1` → `https://lens.ncdlabs.com/api/webhooks/gitea`. OAuth app name `Gitea Lens` (user apps id `4`), redirect `https://lens.ncdlabs.com/api/v1/auth/callback`.
 
 ## References
 
 - Spec: `docs/prd-spec.md`
-- Implementation blueprint: `docs/implementation-plan.md`
-- Target tree: PRD §49 / plan §22
-- First build slice: plan §24
+- Plan: `docs/implementation-plan.md`
+- Config example: `config.example.yaml`
+- Installer: `scripts/install.sh`, `install.example.yaml` → `./scripts/install.sh` or `make install`
+- Run local: `npm run start` / `restart` (prints App+API URLs, bootstrap user/password, opens browser; API `:8090` + Vite `:5173`; default password `lens-local` if unset; prefers `config.yaml`); `npm run stop`
+- Binary-shaped local: `make frontend && make build-go` then `./bin/lens serve`
+- Compose: `podman compose -f compose.yaml up --build`
+- Tests: `go test ./...`
+- Cluster: `helm upgrade --install gitea-lens deploy/helm/gitea-lens -n gitea-lens -f deploy/helm/gitea-lens/values-k3s-home.yaml`
+- Deploy skill: `.cursor/skills/deploy-gitea-lens/` (build/push/Helm + smoke + mandatory rollback; optional Gitea `install-ui` only when explicitly requested)
+- Secrets (live, not in git): `gitea-lens/gitea-lens` (token, bootstrap, oauth, webhook secret, encryption key), `gitea-lens/gitea-registry`
 
 ## Known gotchas
 
-- Repository was greenfield at planning (only PRD present; no application code/commits).
-- Gitea Actions run/job APIs and webhooks are relatively new — declare minimum version after capability spike (plan Q1).
-- Subpath reverse-proxy (`/lens`) is first-class and easy to get wrong (assets, OAuth redirects, cookies).
-- Gitea UI installer must use marker blocks; never silently overwrite admin `extra_*.tmpl` content.
-- SQLite needs WAL + short transactions under webhook + reconcile writers.
+- Default `GOPATH` symlink `/Users/lou/go` may point at an unavailable volume; use `GOPATH`/`GOMODCACHE` under `~/Library/Caches` if `go mod` fails with `mkdir /Users/lou/go`.
+- Embed requires `internal/server/ui/dist` (populated by `make frontend` from `web/dist`).
+- Private/lab Gitea URLs need `LENS_GITEA_ALLOW_PRIVATE_NETWORK=true` (SSRF guard fails closed on DNS errors; dial-time private IP check).
+- Empty repo sync does **not** soft-delete the catalog (zero-result reconcile is a no-op for deletes).
+- Local compose leaves `LENS_AUTH_BOOTSTRAP_PASSWORD` empty by default (bootstrap login disabled until set).
+- Gitea Actions run/job JSON shapes vary; client accepts wrapped or flat arrays and degrades on 404.
+- Subpath deploys must set `server.external_url` with the correct path; client-forwarded prefix is ignored.
+- **Image build:** full multi-stage Dockerfile amd64 under Lima/QEMU crashes during `go build`; use cross-compile + `Containerfile.runtime`.
+- **Registry pull:** namespace needs `gitea-registry` dockerconfig for `git.ncdlabs.com` (portal copy was stale; recreate with a token that can pull `ncdlabs/gitea-lens`).
+- **DNS:** Private hosts live in Pi-hole v6 `dns.hosts` inside `/etc/pihole/pihole.toml` (not `custom.list`). Entry: `100.125.125.244 lens.ncdlabs.com`. Also Cloudflare DNS-only A → `100.125.125.244` (for Chrome Secure DNS / 1.1.1.1). Gitea host `k3s3` has `/etc/hosts` pin for webhooks. After adding hosts, restart `pihole-FTL` and flush Mac DNS (`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`).
+- Connected Gitea is **1.25.5** (plan target family ~1.26); Actions APIs present with capability detection.
 
 ## Policies
 
 - Do not remove documented product/debug features without explicit approval.
-- Do not introduce ncdLabs-hosted service dependencies.
-- Do not trust client-side repository filtering for authorization.
+- No ncdLabs-hosted service dependencies.
+- Never trust client-side repository filtering for authorization.
 - Ask before major scope expansion (write ops, multi-forge, Redis, WebSockets).
 
 ## Known constraints
 
-- Target Gitea API family ~1.26 (docs cite 1.26.4); capability-detect and degrade.
-- V1 read-first; rerun/cancel deferred.
-- Performance design targets: ~1k repos, 10k open PRs, 1M retained runs (engineering targets, not SLAs).
+- Target Gitea API family ~1.26; capability JSON stored on instance; Actions features degrade when APIs missing.
+- V1 read-first; rerun/cancel deferred. Intentional V1 service-token log fetch remains as-is.
+- Postgres: insert paths use `RETURNING id` (bootstrap user, webhook events); broader Postgres production readiness still incomplete vs SQLite.
+- React Flow DAG optional polish; accessible list fallback ships.
+- User-editable attention severity UI deferred.
 
 ## Environment notes
 
 - Default listen `:8090`; data dir `/data` in containers.
-- Image target: `ghcr.io/ncdlabs/gitea-lens`.
-- Local containers: Podman / `podman compose` preferred per project conventions.
+- Local containers: Podman / `podman compose` (nerdctl).
+- Webhook endpoint: `POST /api/webhooks/gitea`.
+- install-ui markers: `<!-- BEGIN GITEA-LENS -->` / `<!-- BEGIN GITEA-LENS-TABS -->` under `/var/lib/gitea/custom/templates/custom/` on k3s3 (hostPath for `gitea` Deployment). Links use `target="_blank"`; Gitea must be restarted after template changes (`kubectl -n gitea rollout restart deployment/gitea`).
+- Bootstrap password and OAuth client secret live only in cluster Secret `gitea-lens/gitea-lens` (and `/tmp/gitea-lens-deploy/` on the operator machine — purge when done).
+- Initial sync (2026-09-20): 96 repos, 296 open PRs, 3809 runs, 6680 jobs.
