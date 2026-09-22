@@ -1,6 +1,6 @@
 # PROJECT_SHARED_STATE
 
-**Last updated:** 2026-09-21
+**Last updated:** 2026-09-22
 
 ## Architecture
 
@@ -32,7 +32,7 @@
 - **Encryption:** optional `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) persists OAuth tokens at rest.
 - **Installer:** `scripts/install.sh` (interactive or `--config` + `--non-interactive`); writes gitignored `.env` + `config.yaml`; Compose default, `--method binary` optional.
 - **k3s-home deploy:** namespace `gitea-lens`, Helm chart `deploy/helm/gitea-lens`, values `values-k3s-home.yaml`.
-- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.13` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
+- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.14` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
 - **URL:** `https://lens.ncdlabs.com` (Traefik + cert-manager `letsencrypt-cloudflare-production`; Tailscale private-ingress VIP `100.125.125.244`).
 - **Gitea:** `https://git.ncdlabs.com` (1.25.5, hostNetwork on k3s3). System webhook id `1` → `https://lens.ncdlabs.com/api/webhooks/gitea`. OAuth app name `Gitea Lens` (user apps id `4`), redirect `https://lens.ncdlabs.com/api/v1/auth/callback`.
 
