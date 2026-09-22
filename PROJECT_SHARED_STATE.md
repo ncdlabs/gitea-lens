@@ -60,6 +60,7 @@
 - Empty repo sync does **not** soft-delete the catalog (zero-result reconcile is a no-op for deletes).
 - Local compose leaves `LENS_AUTH_BOOTSTRAP_PASSWORD` empty by default (bootstrap login disabled until set).
 - Gitea Actions run/job JSON shapes vary; client accepts wrapped or flat arrays and degrades on 404.
+- **Gitea 1.25 Actions `path`:** often `ci.yaml@refs/heads/main` (not a repo file path). Lens normalizes to the filename and tries `.gitea/workflows/` then `.github/workflows/` when fetching YAML for the Workflow Graph.
 - Subpath deploys must set `server.external_url` with the correct path; client-forwarded prefix is ignored.
 - **Image build:** full multi-stage Dockerfile amd64 under Lima/QEMU crashes during `go build`; use cross-compile + `Containerfile.runtime`.
 - **Registry pull:** namespace needs `gitea-registry` dockerconfig for `git.ncdlabs.com` (portal copy was stale; recreate with a token that can pull `ncdlabs/gitea-lens`).
