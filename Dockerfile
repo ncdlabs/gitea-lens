@@ -2,7 +2,7 @@
 
 FROM node:22-alpine AS frontend
 WORKDIR /src/web
-COPY web/package.json web/package-lock.json* ./
+COPY web/package.json web/pnpm-lock.yaml* ./
 RUN npm install
 COPY web/ ./
 RUN npm run build
