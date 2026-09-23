@@ -22,18 +22,18 @@
 - **Pipelines UI:** `/pipelines` groups runs by action (`repo_full` + `workflow_path`, fallback name); expand a group to list individual runs, then open `/pipelines/:id` for run detail.
 - **Active Actions flyout:** shell control near Sync/account; badge = in-flight count; panel lists `queued`/`waiting`/`running` runs from `GET /api/v1/workflow-runs/active` with job progress (completed/total jobs) and step progress when `steps_json` is present. Open state persists in `sessionStorage` (`lens-actions-flyout-open`) across SPA navigations and reloads; closes via toggle, Escape, or Pop Out (not outside click — that was dismissing on nav). **Pop Out** opens `/actions-popout` in a named browser window. `workflow_job` webhooks persist steps and publish SSE (`workflow_job`) like `workflow_run`.
 - No Redis; SSE not WebSockets; Gitea-only forge; compose filename `compose.yaml`.
-- Logs fetched on demand; Prometheus `/metrics` requires auth (same session cookie as API) and exposes the 11 PRD §41 series (labels: status/event only — never repo names).
+- Logs fetched on demand with the caller's Gitea OAuth token (bootstrap admin uses the service token); Prometheus `/metrics` accepts session cookie or optional Bearer `LENS_METRICS_TOKEN` and exposes the 11 PRD §41 series (labels: status/event only — never repo names).
 - **Webhook HMAC:** Fail closed when `gitea.url` is set and secret empty unless `gitea.allow_unsigned_webhooks` / `LENS_WEBHOOK_ALLOW_UNSIGNED=true`. Secrets via `LENS_WEBHOOK_SECRET` / `LENS_WEBHOOK_SECRET_FILE` (and longer aliases). Unreadable `*_FILE` paths fail config load (no silent clear).
 - **Integrity:** Upserts COALESCE nil timestamps; PR rejects older `updated_at`; runs accept greater `run_attempt` or same attempt with non-regressing status; open-PR sync closes numbers absent from open list; soft-delete only rows with `last_synced_at < syncStart`; webhook `processing` reaper (~5m).
 - **Proxy prefix:** Strip only `PathPrefix()` from `external_url`; do not trust client `X-Forwarded-Prefix`.
-- **Encryption:** `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) required to persist integration secrets and OAuth tokens in DB; seal fail-closed without key; decrypt fail-closed when key set.
+- **Encryption:** `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) required to persist integration secrets and OAuth tokens in DB; seal fail-closed without key; decrypt fail-closed when key set; ciphertext without key also fail-closed (not treated as plaintext). Helm mounts `LENS_ENCRYPTION_KEY` as required (not optional).
 - **Rate limits:** In-process per-IP limits on bootstrap login, OAuth login start, and webhook POST. Forwarded client IPs honored only when peer is in `server.trusted_proxies` / `LENS_SERVER_TRUSTED_PROXIES` (chi RealIP not used).
 - **OAuth redirect:** only same-app relative paths (`auth.SafeRedirectPath`); absolute/`//` URLs dropped. Login `bootstrap` is reserved (OAuth cannot inherit bootstrap-admin). Users upserted by `(instance_id, gitea_user_id)`.
 - **SSE:** `/api/v1/events` filters by `authz.CanAccessRepo` (bootstrap admins see all). Event types include `workflow_run`, `workflow_job`, `pull_request`.
 - **OAuth tokens:** refresh_token grant used when access token expiry is within 2m; ACL refresh uses refreshed token when available.
 - **Installer:** `scripts/install.sh` (interactive or `--config` + `--non-interactive`); writes gitignored `.env` + `config.yaml`; Compose default, `--method binary` optional.
 - **k3s-home deploy:** namespace `gitea-lens`, Helm chart `deploy/helm/gitea-lens`, values `values-k3s-home.yaml`.
-- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.14` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
+- **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.15` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set) and `LENS_ENCRYPTION_KEY` (required Helm mount for OAuth token / Settings secret persistence).
 - **URL:** `https://lens.ncdlabs.com` (Traefik + cert-manager `letsencrypt-cloudflare-production`; Tailscale private-ingress VIP `100.125.125.244`).
 - **Gitea:** `https://git.ncdlabs.com` (1.25.5, hostNetwork on k3s3). System webhook id `1` → `https://lens.ncdlabs.com/api/webhooks/gitea`. OAuth app name `Gitea Lens` (user apps id `4`), redirect `https://lens.ncdlabs.com/api/v1/auth/callback`.
 
@@ -60,7 +60,8 @@
 - Private/lab Gitea URLs need `LENS_GITEA_ALLOW_PRIVATE_NETWORK=true` (SSRF guard fails closed on DNS errors; dial pins resolved IPs; HTTP(S)_PROXY ignored for forge client).
 - Empty repo sync does **not** soft-delete the catalog (zero-result reconcile is a no-op for deletes).
 - Local compose leaves `LENS_AUTH_BOOTSTRAP_PASSWORD` empty by default (bootstrap login disabled until set).
-- Saving integration secrets via Settings/Setup requires `LENS_ENCRYPTION_KEY`; env/file secrets still work as in-memory defaults without DB cipher writes.
+- Saving integration secrets via Settings/Setup requires `LENS_ENCRYPTION_KEY`; env/file secrets still work as in-memory defaults without DB cipher writes. Cluster Secret must include `LENS_ENCRYPTION_KEY` (Helm mounts it as required).
+- Optional Prometheus scrape: set `LENS_METRICS_TOKEN` in the Secret for Bearer auth to `/metrics`.
 - `LENS_ALLOW_SKIP_SETUP` is rejected when `server.external_url` is non-local (blocks `dev_bootstrap_password` exposure on public URLs).
 - Behind Traefik/Ingress, set `LENS_SERVER_TRUSTED_PROXIES` to the proxy pod CIDR(s) so auth rate limits key on the real client IP.
 - Gitea Actions run/job JSON shapes vary; client accepts wrapped or flat arrays and degrades on 404.
