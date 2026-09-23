@@ -1,6 +1,6 @@
 # PROJECT_SHARED_STATE
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-23
 
 ## Architecture
 
@@ -22,10 +22,9 @@
 - **Pipelines UI:** `/pipelines` groups runs by action (`repo_full` + `workflow_path`, fallback name); expand a group to list individual runs, then open `/pipelines/:id` for run detail.
 - **Active Actions flyout:** shell control near Sync/account; badge = in-flight count; panel lists `queued`/`waiting`/`running` runs from `GET /api/v1/workflow-runs/active` with job progress (completed/total jobs) and step progress when `steps_json` is present. Open state persists in `sessionStorage` (`lens-actions-flyout-open`) across SPA navigations and reloads; closes via toggle, Escape, or Pop Out (not outside click — that was dismissing on nav). **Pop Out** opens `/actions-popout` in a named browser window. `workflow_job` webhooks persist steps and publish SSE (`workflow_job`) like `workflow_run`.
 - No Redis; SSE not WebSockets; Gitea-only forge; compose filename `compose.yaml`.
-- Logs fetched on demand with the caller's Gitea OAuth token (bootstrap admin uses the service token); Prometheus `/metrics` accepts session cookie or optional Bearer `LENS_METRICS_TOKEN` and exposes the 11 PRD §41 series (labels: status/event only — never repo names).
-- **Webhook HMAC:** Fail closed when `gitea.url` is set and secret empty unless `gitea.allow_unsigned_webhooks` / `LENS_WEBHOOK_ALLOW_UNSIGNED=true`. Secrets via `LENS_WEBHOOK_SECRET` / `LENS_WEBHOOK_SECRET_FILE` (and longer aliases). Unreadable `*_FILE` paths fail config load (no silent clear).
-- **Integrity:** Upserts COALESCE nil timestamps; PR rejects older `updated_at`; runs accept greater `run_attempt` or same attempt with non-regressing status; open-PR sync closes numbers absent from open list; soft-delete only rows with `last_synced_at < syncStart`; webhook `processing` reaper (~5m).
-- **Proxy prefix:** Strip only `PathPrefix()` from `external_url`; do not trust client `X-Forwarded-Prefix`.
+- Logs fetched on demand with the caller's Gitea OAuth token (bootstrap admin uses the service token); workflow graph YAML fetch uses the same user-scoped client. Prometheus `/metrics` accepts session cookie or optional Bearer `LENS_METRICS_TOKEN` and exposes the PRD §41 series plus `lens_sse_events_dropped_total` (labels: status/event only — never repo names).
+- **Webhook HMAC:** Fail closed when `gitea.url` is set and secret empty unless `gitea.allow_unsigned_webhooks` / `LENS_WEBHOOK_ALLOW_UNSIGNED=true`. Secrets via `LENS_WEBHOOK_SECRET` / `LENS_WEBHOOK_SECRET_FILE` (and longer aliases). Unreadable `*_FILE` paths fail config load (no silent clear). Helm mounts `LENS_WEBHOOK_SECRET` as required (not optional).
+- **Integrity:** Upserts COALESCE nil timestamps where safe; PR rejects older/`nil`-over-fresh `updated_at`; runs accept greater `run_attempt` or same attempt with non-regressing status (SQL `ON CONFLICT … WHERE`); re-run clears `completed_at` when attempt bumps or status returns in-flight; open-PR sync closes numbers absent from open list; soft-delete only rows with `last_synced_at < syncStart` and clears ACL; `CanAccessRepo` rejects soft-deleted repos; webhook `processing` reaper (~5m) ages from `processing_started_at` (claim time).
 - **Encryption:** `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) required to persist integration secrets and OAuth tokens in DB; seal fail-closed without key; decrypt fail-closed when key set; ciphertext without key also fail-closed (not treated as plaintext). Helm mounts `LENS_ENCRYPTION_KEY` as required (not optional).
 - **Rate limits:** In-process per-IP limits on bootstrap login, OAuth login start, and webhook POST. Forwarded client IPs honored only when peer is in `server.trusted_proxies` / `LENS_SERVER_TRUSTED_PROXIES` (chi RealIP not used).
 - **OAuth redirect:** only same-app relative paths (`auth.SafeRedirectPath`); absolute/`//` URLs dropped. Login `bootstrap` is reserved (OAuth cannot inherit bootstrap-admin). Users upserted by `(instance_id, gitea_user_id)`.
@@ -83,9 +82,10 @@
 
 - Target Gitea API family ~1.26; capability JSON stored on instance; Actions features degrade when APIs missing.
 - V1 read-first; rerun/cancel deferred. Intentional V1 service-token log fetch remains as-is.
-- Postgres: insert paths use `RETURNING id` (bootstrap user, webhook events); broader Postgres production readiness still incomplete vs SQLite.
+- Postgres: insert paths use `RETURNING id` (bootstrap user, webhook events); webhook claim uses `FOR UPDATE SKIP LOCKED`; broader Postgres production readiness still incomplete vs SQLite (keep `replicaCount: 1` on SQLite).
 - React Flow DAG optional polish; accessible list fallback ships.
 - User-editable attention severity UI deferred.
+- Header search uses `/api/v1/search`; SSE query invalidation is event-typed; Active Actions has a 15s poll fallback.
 
 ## Environment notes
 
