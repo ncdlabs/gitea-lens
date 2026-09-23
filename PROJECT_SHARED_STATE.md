@@ -26,10 +26,11 @@
 - **Webhook HMAC:** Fail closed when `gitea.url` is set and secret empty unless `gitea.allow_unsigned_webhooks` / `LENS_WEBHOOK_ALLOW_UNSIGNED=true`. Secrets via `LENS_WEBHOOK_SECRET` / `LENS_WEBHOOK_SECRET_FILE` (and longer aliases). Unreadable `*_FILE` paths fail config load (no silent clear).
 - **Integrity:** Upserts COALESCE nil timestamps; PR rejects older `updated_at`; runs accept greater `run_attempt` or same attempt with non-regressing status; open-PR sync closes numbers absent from open list; soft-delete only rows with `last_synced_at < syncStart`; webhook `processing` reaper (~5m).
 - **Proxy prefix:** Strip only `PathPrefix()` from `external_url`; do not trust client `X-Forwarded-Prefix`.
-- **Rate limits:** In-process per-IP limits on bootstrap login, OAuth login start, and webhook POST (no Redis).
-- **OAuth redirect:** only same-app relative paths (`auth.SafeRedirectPath`); absolute/`//` URLs dropped.
+- **Encryption:** `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) required to persist integration secrets and OAuth tokens in DB; seal fail-closed without key; decrypt fail-closed when key set.
+- **Rate limits:** In-process per-IP limits on bootstrap login, OAuth login start, and webhook POST. Forwarded client IPs honored only when peer is in `server.trusted_proxies` / `LENS_SERVER_TRUSTED_PROXIES` (chi RealIP not used).
+- **OAuth redirect:** only same-app relative paths (`auth.SafeRedirectPath`); absolute/`//` URLs dropped. Login `bootstrap` is reserved (OAuth cannot inherit bootstrap-admin). Users upserted by `(instance_id, gitea_user_id)`.
 - **SSE:** `/api/v1/events` filters by `authz.CanAccessRepo` (bootstrap admins see all). Event types include `workflow_run`, `workflow_job`, `pull_request`.
-- **Encryption:** optional `LENS_ENCRYPTION_KEY` (min 16 chars → SHA-256 AES key) persists OAuth tokens at rest.
+- **OAuth tokens:** refresh_token grant used when access token expiry is within 2m; ACL refresh uses refreshed token when available.
 - **Installer:** `scripts/install.sh` (interactive or `--config` + `--non-interactive`); writes gitignored `.env` + `config.yaml`; Compose default, `--method binary` optional.
 - **k3s-home deploy:** namespace `gitea-lens`, Helm chart `deploy/helm/gitea-lens`, values `values-k3s-home.yaml`.
 - **Image:** `git.ncdlabs.com/ncdlabs/gitea-lens:0.1.14` (linux/amd64; built via host cross-compile + `deploy/docker/Containerfile.runtime` because QEMU `go build` SIGSEGVs). Tag lives in `deploy/helm/gitea-lens/values-k3s-home.yaml` (`pullPolicy: IfNotPresent` — bump tag on each ship). Cluster Secret `gitea-lens/gitea-lens` must include `LENS_WEBHOOK_SECRET` (required at startup when `LENS_GITEA_URL` is set).
@@ -56,9 +57,12 @@
 
 - Default `GOPATH` symlink `/Users/lou/go` may point at an unavailable volume; use `GOPATH`/`GOMODCACHE` under `~/Library/Caches` if `go mod` fails with `mkdir /Users/lou/go`.
 - Embed requires `internal/server/ui/dist` (populated by `make frontend` from `web/dist`).
-- Private/lab Gitea URLs need `LENS_GITEA_ALLOW_PRIVATE_NETWORK=true` (SSRF guard fails closed on DNS errors; dial-time private IP check).
+- Private/lab Gitea URLs need `LENS_GITEA_ALLOW_PRIVATE_NETWORK=true` (SSRF guard fails closed on DNS errors; dial pins resolved IPs; HTTP(S)_PROXY ignored for forge client).
 - Empty repo sync does **not** soft-delete the catalog (zero-result reconcile is a no-op for deletes).
 - Local compose leaves `LENS_AUTH_BOOTSTRAP_PASSWORD` empty by default (bootstrap login disabled until set).
+- Saving integration secrets via Settings/Setup requires `LENS_ENCRYPTION_KEY`; env/file secrets still work as in-memory defaults without DB cipher writes.
+- `LENS_ALLOW_SKIP_SETUP` is rejected when `server.external_url` is non-local (blocks `dev_bootstrap_password` exposure on public URLs).
+- Behind Traefik/Ingress, set `LENS_SERVER_TRUSTED_PROXIES` to the proxy pod CIDR(s) so auth rate limits key on the real client IP.
 - Gitea Actions run/job JSON shapes vary; client accepts wrapped or flat arrays and degrades on 404.
 - **Gitea 1.25 Actions `path`:** often `ci.yaml@refs/heads/main` (not a repo file path). Lens normalizes to the filename and tries `.gitea/workflows/` then `.github/workflows/` when fetching YAML for the Workflow Graph.
 - Subpath deploys must set `server.external_url` with the correct path; client-forwarded prefix is ignored.
